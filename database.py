@@ -169,7 +169,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "0.3")
+    PROTOCOL = ("seamless", "database", "1.0")
 
     def __init__(self, host, port):
         self.host = host
@@ -183,6 +183,7 @@ class DatabaseServer:
         app = web.Application(client_max_size=10e9)
         app.add_routes(
             [
+                web.get("/healthcheck", self._healthcheck),
                 web.get("/{tail:.*}", self._handle_get),
                 web.put("/{tail:.*}", self._handle_put),
             ]
@@ -197,6 +198,9 @@ class DatabaseServer:
             return
         coro = self._start()
         self.future = asyncio.ensure_future(coro)
+
+    async def _healthcheck(self, _):
+        return web.Response(status=200, body="OK")
 
     async def _handle_get(self, request):
         try:
