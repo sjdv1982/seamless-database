@@ -8,6 +8,7 @@ import signal
 import socket
 import sys
 import time
+from urllib.parse import quote
 from peewee import DoesNotExist
 
 from database_models import (
@@ -232,6 +233,13 @@ def pick_random_free_port(host: str, start: int, end: int) -> int:
     raise RuntimeError(f"No free port available in range {start}-{end}")
 
 
+def build_sqlite_readonly_uri(path: str) -> str:
+    abs_path = os.path.abspath(path)
+    normalized = abs_path.replace("\\", "/")
+    quoted = quote(normalized, safe="/:")
+    return f"file:{quoted}?mode=ro"
+
+
 types = (
     "protocol",
     "buffer_info",
@@ -274,11 +282,20 @@ class DatabaseServer:
     future = None
     PROTOCOL = ("seamless", "database", "1.0")
 
-    def __init__(self, host, port, *, timeout_seconds=None, status_tracker=None):
+    def __init__(
+        self,
+        host,
+        port,
+        *,
+        timeout_seconds=None,
+        status_tracker=None,
+        writable=True,
+    ):
         self.host = host
         self.port = port
         self._timeout_seconds = timeout_seconds
         self._status_tracker = status_tracker
+        self._writable = writable
         self._timeout_task = None
         self._last_request = None
         self._runner = None
@@ -399,6 +416,10 @@ class DatabaseServer:
 
     async def _handle_put(self, request):
         try:
+            if not self._writable:
+                return web.Response(
+                    status=405, body="ERROR: Database server is read-only"
+                )
             self._register_activity()
             # print("NEW PUT REQUEST", hex(id(request)))
             data = await request.read()
@@ -772,6 +793,11 @@ If it doesn't exist, a new file is created.""",
     )
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument(
+        "--writable",
+        action="store_true",
+        help="Allow HTTP PUT requests (opens database read/write)",
+    )
+    p.add_argument(
         "--status-file",
         type=str,
         help="JSON file used to report server status",
@@ -786,7 +812,23 @@ If it doesn't exist, a new file is created.""",
     global status_tracker
     database_file = args.database_file
     print("DATABASE FILE", database_file)
-    db_init(database_file)
+    writable = args.writable
+    if writable:
+        db_init(database_file)
+    else:
+        if not os.path.exists(database_file):
+            raise_startup_error(
+                FileNotFoundError(
+                    f"Database file '{database_file}' must exist when --writable is not set"
+                )
+            )
+        readonly_uri = build_sqlite_readonly_uri(database_file)
+        db_init(
+            readonly_uri,
+            init_parameters={"uri": True},
+            connection_parameters={"uri": True},
+            create_tables=False,
+        )
 
     selected_port = args.port if args.port is not None else 5522
     status_file_path = args.status_file
@@ -822,6 +864,7 @@ If it doesn't exist, a new file is created.""",
         selected_port,
         timeout_seconds=timeout_seconds,
         status_tracker=status_tracker,
+        writable=writable,
     )
     database_server.start()
 

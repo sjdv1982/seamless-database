@@ -199,14 +199,21 @@ for model_class in _model_classes:
         raise Exception
 
 
-def db_init(filename, init_parameters: dict = None, connection_parameters: dict = None):
+def db_init(
+    filename,
+    init_parameters: dict = None,
+    connection_parameters: dict = None,
+    *,
+    create_tables: bool = True,
+):
     if init_parameters is None:
         init_parameters = {}
     if connection_parameters is None:
         connection_parameters = {}
     _db.init(filename, **init_parameters)
     _db.connect(**connection_parameters)
-    _db.create_tables(_model_classes, safe=True)
+    if create_tables:
+        _db.create_tables(_model_classes, safe=True)
 
 
 db_atomic = _db.atomic
