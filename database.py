@@ -364,6 +364,7 @@ class DatabaseServer:
             self._last_request = time.monotonic()
 
     async def _healthcheck(self, _):
+        self._register_activity()
         return web.Response(status=200, body="OK")
 
     async def _handle_get(self, request):
