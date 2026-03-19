@@ -41,7 +41,8 @@ class BaseModel(Model):
             if prim == "id" and prim not in kwargs:
                 raise exc from None
             instance = cls.get(**{prim: kwargs[prim]})
-            instance.update(**kwargs)
+            for k, v in kwargs.items():
+                setattr(instance, k, v)
             instance.save()
 
 
@@ -53,11 +54,6 @@ class Transformation(BaseModel):
 class RevTransformation(BaseModel):
     result = ChecksumField(index=True, unique=False)
     checksum = ChecksumField(unique=False)
-
-
-class Elision(BaseModel):
-    checksum = ChecksumField(primary_key=True)
-    result = ChecksumField()
 
 
 class BufferInfo(BaseModel):
@@ -91,19 +87,14 @@ class SyntacticToSemantic(BaseModel):
                 raise exc from None
 
 
-class Compilation(BaseModel):
-    checksum = ChecksumField(primary_key=True)
-    result = ChecksumField(index=True)
-
-
 class Expression(BaseModel):
 
     input_checksum = ChecksumField()
     path = CharField(max_length=100)
     celltype = CharField(max_length=20)
-    hash_pattern = CharField(max_length=20)
     target_celltype = CharField(max_length=20)
-    target_hash_pattern = CharField(max_length=20)
+    validator = ChecksumField(null=True)
+    validator_language = CharField(max_length=20, null=True)
     result = ChecksumField(index=True, unique=False)
 
     class Meta:
@@ -113,9 +104,7 @@ class Expression(BaseModel):
             "input_checksum",
             "path",
             "celltype",
-            "hash_pattern",
             "target_celltype",
-            "target_hash_pattern",
         )
 
     @classmethod
@@ -128,29 +117,12 @@ class Expression(BaseModel):
                 "input_checksum",
                 "path",
                 "celltype",
-                "hash_pattern",
                 "target_celltype",
-                "target_hash_pattern",
             ):
                 kwargs2[k] = kwargs[k]
             instance = cls.get(**kwargs2)
             instance.result = kwargs["result"]
             instance.save()
-
-
-class StructuredCellJoin(BaseModel):
-    """
-    Structured cell join:
-    input checksum: checksum of a dict containing:
-    - auth: auth checksum
-    - inchannels: dict-of-checksums where key=inchannel and value=checksum
-    - schema: schema checksum (if not empty)
-    - hash_pattern: structured cell hash pattern (if not empty)
-    result: value checksum of the structured cell
-    """
-
-    checksum = ChecksumField(primary_key=True)
-    result = ChecksumField(index=True, unique=False)
 
 
 class MetaData(BaseModel):
@@ -165,7 +137,7 @@ class MetaData(BaseModel):
     metadata = JSONField()
 
 
-class ContestedTransformation(BaseModel):
+class IrreproducibleTransformation(BaseModel):
     result = ChecksumField(index=True, unique=False)
     checksum = ChecksumField(index=True, unique=False)
     metadata = JSONField()
@@ -174,14 +146,11 @@ class ContestedTransformation(BaseModel):
 _model_classes = [
     Transformation,
     RevTransformation,
-    Elision,
     BufferInfo,
     SyntacticToSemantic,
-    Compilation,
     Expression,
-    StructuredCellJoin,
     MetaData,
-    ContestedTransformation,
+    IrreproducibleTransformation,
 ]
 _primary = {}
 for model_class in _model_classes:

@@ -16,14 +16,11 @@ from database_models import (
     db_atomic,
     Transformation,
     RevTransformation,
-    Elision,
     BufferInfo,
     SyntacticToSemantic,
-    Compilation,
     Expression,
-    StructuredCellJoin,
     MetaData,
-    ContestedTransformation,
+    IrreproducibleTransformation,
 )
 
 
@@ -245,15 +242,11 @@ types = (
     "buffer_info",
     "syntactic_to_semantic",
     "semantic_to_syntactic",
-    "compilation",
     "transformation",
-    "elision",
     "metadata",
     "expression",
-    "structured_cell_join",
-    "contest",  # only PUT
+    "irreproducible",  # only PUT
     "rev_expression",  # only GET
-    "rev_join",  # only GET
     "rev_transformations",  # only GET
 )
 
@@ -280,7 +273,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "1.0")
+    PROTOCOL = ("seamless", "database", "2.0")
 
     def __init__(
         self,
@@ -519,21 +512,9 @@ class DatabaseServer:
                 return [parse_checksum(result.semantic) for result in results]
             raise DatabaseError("Unknown key")
 
-        elif type_ == "compilation":
-            try:
-                return parse_checksum(Compilation[checksum].result)
-            except DoesNotExist:
-                return None  # None is also a valid response
-
         elif type_ == "transformation":
             try:
                 return parse_checksum(Transformation[checksum].result)
-            except DoesNotExist:
-                return None  # None is also a valid response
-
-        elif type_ == "elision":
-            try:
-                return parse_checksum(Elision[checksum].result)
             except DoesNotExist:
                 return None  # None is also a valid response
 
@@ -592,19 +573,6 @@ class DatabaseServer:
                 result.append(expr)
             return result
 
-        elif type_ == "rev_join":
-            joins = (
-                StructuredCellJoin.select()
-                .where(
-                    StructuredCellJoin.result == checksum,
-                )
-                .execute()
-            )
-            if not joins:
-                return None
-            result = [join.checksum for join in joins]
-            return result
-
         elif type_ == "rev_transformations":
             transformations = (
                 RevTransformation.select()
@@ -617,12 +585,6 @@ class DatabaseServer:
                 return None
             result = [transformation.checksum for transformation in transformations]
             return result
-
-        elif type_ == "structured_cell_join":
-            try:
-                return parse_checksum(StructuredCellJoin[checksum].result)
-            except DoesNotExist:
-                return None  # None is also a valid response
 
         else:
             raise DatabaseError("Unknown request type")
@@ -642,7 +604,7 @@ class DatabaseServer:
                 except DoesNotExist:
                     pass
                 value = json.dumps(value, sort_keys=True, indent=2)
-            except Exception as exc:
+            except Exception:
                 raise DatabaseError("Malformed PUT buffer info request") from None
             BufferInfo.create(checksum=checksum, buffer_info=value)
 
@@ -668,15 +630,6 @@ class DatabaseServer:
                         syntactic=syntactic_checksum,
                     )
 
-        elif type_ == "compilation":
-            try:
-                value = parse_checksum(request["value"], as_bytes=False)
-            except (KeyError, ValueError):
-                raise DatabaseError(
-                    "Malformed PUT compilation result request: value must be a checksum"
-                ) from None
-            Compilation.create(checksum=checksum, result=value)
-
         elif type_ == "transformation":
             try:
                 value = parse_checksum(request["value"], as_bytes=False)
@@ -686,15 +639,6 @@ class DatabaseServer:
                 ) from None
             Transformation.create(checksum=checksum, result=value)
             RevTransformation.create(checksum=checksum, result=value)
-
-        elif type_ == "elision":
-            try:
-                value = parse_checksum(request["value"], as_bytes=False)
-            except (KeyError, ValueError):
-                raise DatabaseError(
-                    "Malformed PUT elision result request: value must be a checksum"
-                ) from None
-            Elision.create(checksum=checksum, result=value)
 
         elif type_ == "expression":
             try:
@@ -729,15 +673,6 @@ class DatabaseServer:
                 result=value,
             )
 
-        elif type_ == "structured_cell_join":
-            try:
-                value = parse_checksum(request["value"], as_bytes=False)
-            except (KeyError, ValueError):
-                raise DatabaseError(
-                    "Malformed PUT structured_cell_join request: value must be a checksum"
-                ) from None
-            StructuredCellJoin.create(checksum=checksum, result=value)
-
         elif type_ == "metadata":
             try:
                 value = request["value"]
@@ -746,11 +681,11 @@ class DatabaseServer:
                 raise DatabaseError("Malformed PUT metadata request") from None
             MetaData.create(checksum=checksum, metadata=value)
 
-        elif type_ == "contest":
+        elif type_ == "irreproducible":
             try:
                 result = parse_checksum(request["result"], as_bytes=False)
             except (KeyError, ValueError):
-                raise DatabaseError("Malformed 'contest' request") from None
+                raise DatabaseError("Malformed 'irreproducible' request") from None
             in_transformations = False
             try:
                 tf = Transformation[checksum]
@@ -762,7 +697,7 @@ class DatabaseServer:
                 if tf_result != result:
                     return web.Response(
                         status=404,
-                        reason="Transformation does not have the contested result",
+                        reason="Transformation does not have the irreproducible result",
                     )
             try:
                 metadata = MetaData[checksum].metadata
@@ -770,7 +705,7 @@ class DatabaseServer:
             except DoesNotExist:
                 metadata = ""
                 in_metadata = False
-            ContestedTransformation.create(
+            IrreproducibleTransformation.create(
                 checksum=checksum, result=result, metadata=metadata
             )
             if in_transformations:
