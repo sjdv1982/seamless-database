@@ -46,6 +46,25 @@ seamless-database seamless.db --port-range 5520 5530 --writable
 seamless-database seamless.db --port 5522
 ```
 
+### Status-file protocol
+
+`seamless-database` does not require a status file. If `--status-file` is omitted, it runs independently.
+
+If `--status-file` is provided, the file is used for two things:
+
+1. Report the chosen port, especially when `--port-range` is used.
+2. Report whether startup succeeded (`"running"`) or failed (`"failed"`).
+
+The status-file protocol is simple:
+
+1. Wait for the status file to exist and parse it as JSON.
+2. Reuse the existing JSON object as the base payload. An empty JSON object `{}` is sufficient.
+3. Choose or validate its listening port.
+4. Once the HTTP server is up, rewrite the same file with `"status": "running"` and the selected `"port"`.
+5. If startup fails before the server is running, rewrite the file with `"status": "failed"` instead.
+
+If `remote-http-launcher` is used, it may pre-populate the JSON with fields such as the PID, workdir, or `"status": "starting"`. `seamless-database` preserves such fields when it writes back the final status.
+
 ### CLI options
 
 | Option | Description |
