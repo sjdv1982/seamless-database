@@ -23,6 +23,9 @@ from database_models import (
     IrreproducibleTransformation,
 )
 
+DEFAULT_RANDOM_PORT_START = 49152
+DEFAULT_RANDOM_PORT_END = 65535
+
 
 STATUS_FILE_WAIT_TIMEOUT = 20.0
 INACTIVITY_CHECK_INTERVAL = 1.0
@@ -775,21 +778,28 @@ If it doesn't exist, a new file is created.""",
             create_tables=False,
         )
 
-    selected_port = args.port if args.port is not None else 5522
-    status_file_path = args.status_file
-    status_tracker = None
-    if status_file_path:
-        status_file_contents = wait_for_status_file(status_file_path)
-        status_tracker = StatusFileTracker(
-            status_file_path, status_file_contents, args.port
-        )
-
     if args.port_range:
         start, end = args.port_range
         try:
             selected_port = pick_random_free_port(args.host, start, end)
         except BaseException as exc:
             raise_startup_error(exc)
+    elif args.port is not None:
+        selected_port = args.port
+    else:
+        try:
+            selected_port = pick_random_free_port(
+                args.host, DEFAULT_RANDOM_PORT_START, DEFAULT_RANDOM_PORT_END
+            )
+        except BaseException as exc:
+            raise_startup_error(exc)
+    status_file_path = args.status_file
+    status_tracker = None
+    if status_file_path:
+        status_file_contents = wait_for_status_file(status_file_path)
+        status_tracker = StatusFileTracker(
+            status_file_path, status_file_contents, selected_port
+        )
     if status_tracker:
         status_tracker.port = selected_port
 
