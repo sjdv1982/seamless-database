@@ -20,6 +20,7 @@ from database_models import (
     SyntacticToSemantic,
     Expression,
     MetaData,
+    BucketProbe,
     IrreproducibleTransformation,
 )
 
@@ -152,6 +153,16 @@ def _normalize_metadata_value(value):
     raise TypeError(type(value))
 
 
+def _normalize_freshness_tokens(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        value = json.loads(value)
+        if isinstance(value, dict):
+            return value
+    raise TypeError(type(value))
+
+
 def _validate_execution_record_identity(
     checksum: str, result: str, value: dict
 ) -> None:
@@ -169,6 +180,24 @@ def _validate_execution_record_identity(
         for field in checksum_fields:
             if not isinstance(field, str) or not field:
                 raise ValueError("checksum_fields")
+
+
+def _validate_bucket_probe_request(
+    bucket_kind: str,
+    label: str,
+    bucket_checksum: str,
+    freshness_tokens: dict,
+    captured_at: str,
+) -> None:
+    if bucket_kind not in BUCKET_KINDS:
+        raise ValueError("bucket_kind")
+    if not isinstance(label, str) or not label:
+        raise ValueError("label")
+    parse_checksum(bucket_checksum, as_bytes=False)
+    if not isinstance(freshness_tokens, dict):
+        raise ValueError("freshness_tokens")
+    if not isinstance(captured_at, str) or not captured_at:
+        raise ValueError("captured_at")
 
 
 def _get_transformation_row(checksum: str):
@@ -318,6 +347,7 @@ types = (
     "semantic_to_syntactic",
     "transformation",
     "metadata",
+    "bucket_probe",
     "expression",
     "irreproducible",
     "rev_expression",  # only GET
@@ -347,7 +377,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "2.1")
+    PROTOCOL = ("seamless", "database", "2.2")
 
     def __init__(
         self,
@@ -461,13 +491,15 @@ class DatabaseServer:
                     type_ = rq["type"]
                     if type_ not in types:
                         raise KeyError
-                    if type_ != "protocol":
+                    if type_ not in ("protocol", "bucket_probe"):
                         checksum = rq["checksum"]
                 except KeyError:
                     raise DatabaseError("Malformed request") from None
 
                 if type_ == "protocol":
                     response = list(self.PROTOCOL)
+                elif type_ == "bucket_probe":
+                    response = await self._get(type_, None, rq)
                 else:
                     try:
                         checksum = parse_checksum(checksum, as_bytes=False)
@@ -519,16 +551,20 @@ class DatabaseServer:
                     type_ = rq["type"]
                     if type_ not in types:
                         raise KeyError
-                    checksum = rq["checksum"]
+                    if type_ != "bucket_probe":
+                        checksum = rq["checksum"]
+                    else:
+                        checksum = None
                 except KeyError:
                     # import traceback; traceback.print_exc()
                     raise DatabaseError("Malformed request") from None
 
-                try:
-                    checksum = parse_checksum(checksum, as_bytes=False)
-                except ValueError:
-                    # import traceback; traceback.print_exc()
-                    raise DatabaseError("Malformed request") from None
+                if type_ != "bucket_probe":
+                    try:
+                        checksum = parse_checksum(checksum, as_bytes=False)
+                    except ValueError:
+                        # import traceback; traceback.print_exc()
+                        raise DatabaseError("Malformed request") from None
 
                 response = await self._put(type_, checksum, rq)
             except DatabaseError as exc:
@@ -599,6 +635,27 @@ class DatabaseServer:
                 return MetaData[checksum].metadata
             except DoesNotExist:
                 return None  # None is also a valid response
+
+        elif type_ == "bucket_probe":
+            try:
+                bucket_kind = request["bucket_kind"]
+                label = request["label"]
+            except KeyError:
+                raise DatabaseError("Malformed bucket_probe request") from None
+            try:
+                row = BucketProbe.get(
+                    BucketProbe.bucket_kind == bucket_kind,
+                    BucketProbe.label == label,
+                )
+            except DoesNotExist:
+                return None
+            return {
+                "bucket_kind": row.bucket_kind,
+                "label": row.label,
+                "bucket_checksum": row.bucket_checksum,
+                "captured_at": row.captured_at,
+                "freshness_tokens": row.freshness_tokens,
+            }
 
         elif type_ == "irreproducible":
             result_checksum = request.get("result")
@@ -818,6 +875,46 @@ class DatabaseServer:
                     _ensure_rev_transformation_row(checksum, result)
                 MetaData.create(checksum=checksum, result=result, metadata=value)
 
+        elif type_ == "bucket_probe":
+            try:
+                bucket_kind = request["bucket_kind"]
+                label = request["label"]
+                bucket_checksum = parse_checksum(
+                    request["bucket_checksum"], as_bytes=False
+                )
+                freshness_tokens = _normalize_freshness_tokens(
+                    request["freshness_tokens"]
+                )
+                captured_at = request["captured_at"]
+                _validate_bucket_probe_request(
+                    bucket_kind,
+                    label,
+                    bucket_checksum,
+                    freshness_tokens,
+                    captured_at,
+                )
+            except (KeyError, ValueError, TypeError):
+                raise DatabaseError("Malformed PUT bucket_probe request") from None
+            with db_atomic():
+                query = BucketProbe.select().where(
+                    BucketProbe.bucket_kind == bucket_kind,
+                    BucketProbe.label == label,
+                )
+                if query.exists():
+                    row = query.get()
+                    row.bucket_checksum = bucket_checksum
+                    row.captured_at = captured_at
+                    row.freshness_tokens = freshness_tokens
+                    row.save()
+                else:
+                    BucketProbe.create(
+                        bucket_kind=bucket_kind,
+                        label=label,
+                        bucket_checksum=bucket_checksum,
+                        captured_at=captured_at,
+                        freshness_tokens=freshness_tokens,
+                    )
+
         elif type_ == "irreproducible":
             try:
                 result = parse_checksum(request["result"], as_bytes=False)
@@ -976,3 +1073,7 @@ If it doesn't exist, a new file is created.""",
         raise
     finally:
         loop.run_until_complete(database_server.stop())
+BUCKET_KINDS = frozenset(
+    ("node", "environment", "node_env", "queue", "queue_node")
+)
+

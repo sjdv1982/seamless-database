@@ -139,6 +139,19 @@ class MetaData(BaseModel):
     metadata = JSONField()
 
 
+class BucketProbe(BaseModel):
+    bucket_kind = CharField(max_length=20)
+    label = TextField()
+    bucket_checksum = ChecksumField(index=True, unique=False)
+    captured_at = TextField()
+    freshness_tokens = JSONField()
+
+    class Meta:
+        database = _db
+        legacy_table_names = False
+        primary_key = CompositeKey("bucket_kind", "label")
+
+
 class IrreproducibleTransformation(BaseModel):
     result = ChecksumField(index=True, unique=False)
     checksum = ChecksumField(index=True, unique=False)
@@ -152,6 +165,7 @@ _model_classes = [
     SyntacticToSemantic,
     Expression,
     MetaData,
+    BucketProbe,
     IrreproducibleTransformation,
 ]
 _primary = {}
@@ -161,6 +175,7 @@ for model_class in _model_classes:
         or model_class is SyntacticToSemantic
         or model_class is RevTransformation
         or model_class is MetaData
+        or model_class is BucketProbe
     ):
         continue
     for fieldname, field in model_class._meta.fields.items():

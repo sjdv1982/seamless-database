@@ -13,6 +13,7 @@ if str(DATABASE_DIR) not in sys.path:
 
 from database import DatabaseServer  # noqa: E402
 from database_models import (  # noqa: E402
+    BucketProbe,
     MetaData,
     RevTransformation,
     Transformation,
@@ -24,6 +25,8 @@ from database_models import (  # noqa: E402
 
 TF_CHECKSUM = "1" * 64
 RESULT_CHECKSUM = "2" * 64
+BUCKET_CHECKSUM = "3" * 64
+BUCKET_CHECKSUM_2 = "4" * 64
 
 
 def _close_db():
@@ -213,5 +216,59 @@ def test_put_irreproducible_moves_metadata_and_deletes_normal_rows(tmp_path):
         )
         assert response.status == 409
         assert IrreproducibleTransformation.select().count() == 1
+    finally:
+        _close_db()
+
+
+def test_bucket_probe_roundtrip_and_overwrite(tmp_path):
+    dbfile = tmp_path / "bucket-probe.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "bucket_probe",
+        "bucket_kind": "environment",
+        "label": "conda:/envs/seamless1",
+        "bucket_checksum": BUCKET_CHECKSUM,
+        "captured_at": "2026-04-26T12:00:00Z",
+        "freshness_tokens": {"conda_meta_mtime": 123},
+    }
+    expected_probe = {k: v for k, v in request.items() if k != "type"}
+    updated_request = {
+        **request,
+        "bucket_checksum": BUCKET_CHECKSUM_2,
+        "captured_at": "2026-04-26T12:05:00Z",
+        "freshness_tokens": {"conda_meta_mtime": 456},
+    }
+
+    try:
+        assert asyncio.run(server._put("bucket_probe", None, request)) == "OK"
+        probe = asyncio.run(
+            server._get(
+                "bucket_probe",
+                None,
+                {
+                    "type": "bucket_probe",
+                    "bucket_kind": request["bucket_kind"],
+                    "label": request["label"],
+                },
+            )
+        )
+        assert probe == expected_probe
+        assert BucketProbe.select().count() == 1
+
+        assert asyncio.run(server._put("bucket_probe", None, updated_request)) == "OK"
+        probe = asyncio.run(
+            server._get(
+                "bucket_probe",
+                None,
+                {
+                    "type": "bucket_probe",
+                    "bucket_kind": request["bucket_kind"],
+                    "label": request["label"],
+                },
+            )
+        )
+        assert probe == {k: v for k, v in updated_request.items() if k != "type"}
+        assert BucketProbe.select().count() == 1
     finally:
         _close_db()
