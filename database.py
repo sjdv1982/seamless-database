@@ -138,6 +138,77 @@ class DatabaseError(Exception):
     pass
 
 
+def _conflict_response(message: str) -> web.Response:
+    return web.Response(status=409, text="ERROR: " + message)
+
+
+def _normalize_metadata_value(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        value = json.loads(value)
+        if isinstance(value, dict):
+            return value
+    raise TypeError(type(value))
+
+
+def _validate_execution_record_identity(
+    checksum: str, result: str, value: dict
+) -> None:
+    schema_version = value.get("schema_version")
+    if not isinstance(schema_version, int):
+        raise ValueError("schema_version")
+    if value.get("tf_checksum") != checksum:
+        raise ValueError("tf_checksum")
+    if value.get("result_checksum") != result:
+        raise ValueError("result_checksum")
+    checksum_fields = value.get("checksum_fields")
+    if checksum_fields is not None:
+        if not isinstance(checksum_fields, list):
+            raise ValueError("checksum_fields")
+        for field in checksum_fields:
+            if not isinstance(field, str) or not field:
+                raise ValueError("checksum_fields")
+
+
+def _get_transformation_row(checksum: str):
+    try:
+        return Transformation[checksum]
+    except DoesNotExist:
+        return None
+
+
+def _get_metadata_row(checksum: str):
+    try:
+        return MetaData[checksum]
+    except DoesNotExist:
+        return None
+
+
+def _ensure_rev_transformation_row(checksum: str, result: str) -> None:
+    query = RevTransformation.select().where(
+        RevTransformation.checksum == checksum, RevTransformation.result == result
+    )
+    if query.exists():
+        return
+    RevTransformation.create(checksum=checksum, result=result)
+
+
+def _delete_rev_transformation_rows(checksum: str, result: str) -> None:
+    (
+        RevTransformation.delete()
+        .where(RevTransformation.checksum == checksum, RevTransformation.result == result)
+        .execute()
+    )
+
+
+def _irreproducible_exists(checksum: str) -> bool:
+    query = IrreproducibleTransformation.select().where(
+        IrreproducibleTransformation.checksum == checksum
+    )
+    return query.exists()
+
+
 def is_port_in_use(address, port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex((address, port)) == 0
@@ -248,7 +319,7 @@ types = (
     "transformation",
     "metadata",
     "expression",
-    "irreproducible",  # only PUT
+    "irreproducible",
     "rev_expression",  # only GET
     "rev_transformations",  # only GET
 )
@@ -276,7 +347,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "2.0")
+    PROTOCOL = ("seamless", "database", "2.1")
 
     def __init__(
         self,
@@ -463,6 +534,8 @@ class DatabaseServer:
             except DatabaseError as exc:
                 status = 400
                 response = "ERROR: " + exc.args[0]
+            if isinstance(response, web.Response):
+                return response
             status2, response = format_response(response)
             if status == 200 and status2 is not None:
                 status = status2
@@ -526,6 +599,33 @@ class DatabaseServer:
                 return MetaData[checksum].metadata
             except DoesNotExist:
                 return None  # None is also a valid response
+
+        elif type_ == "irreproducible":
+            result_checksum = request.get("result")
+            if result_checksum is not None:
+                try:
+                    result_checksum = parse_checksum(result_checksum, as_bytes=False)
+                except ValueError:
+                    raise DatabaseError("Malformed irreproducible request") from None
+            rows = (
+                IrreproducibleTransformation.select()
+                .where(IrreproducibleTransformation.checksum == checksum)
+                .execute()
+            )
+            result = []
+            for row in rows:
+                if result_checksum is not None and row.result != result_checksum:
+                    continue
+                result.append(
+                    {
+                        "checksum": row.checksum,
+                        "result": row.result,
+                        "metadata": row.metadata,
+                    }
+                )
+            if not result:
+                return None
+            return result
 
         elif type_ == "expression":
             try:
@@ -678,43 +778,78 @@ class DatabaseServer:
 
         elif type_ == "metadata":
             try:
-                value = request["value"]
-                value = json.loads(value)
-            except (KeyError, ValueError):
+                value = _normalize_metadata_value(request["value"])
+                result = parse_checksum(request["result"], as_bytes=False)
+                _validate_execution_record_identity(checksum, result, value)
+            except (KeyError, ValueError, TypeError):
                 raise DatabaseError("Malformed PUT metadata request") from None
-            MetaData.create(checksum=checksum, metadata=value)
+            with db_atomic():
+                if _irreproducible_exists(checksum):
+                    return _conflict_response(
+                        "Transformation already has irreproducible records"
+                    )
+                tf_row = _get_transformation_row(checksum)
+                if tf_row is not None:
+                    tf_result = parse_checksum(tf_row.result, as_bytes=False)
+                    if tf_result != result:
+                        return _conflict_response(
+                            "Transformation result does not match execution record result"
+                        )
+                metadata_row = _get_metadata_row(checksum)
+                if metadata_row is not None:
+                    metadata_result = parse_checksum(metadata_row.result, as_bytes=False)
+                    if metadata_result != result:
+                        return _conflict_response(
+                            "Execution record result does not match stored metadata result"
+                        )
+                    if metadata_row.metadata != value:
+                        return _conflict_response(
+                            "Execution record already exists with different metadata"
+                        )
+                    if tf_row is None:
+                        Transformation.create(checksum=checksum, result=result)
+                    _ensure_rev_transformation_row(checksum, result)
+                    return "OK"
+
+                if tf_row is None:
+                    Transformation.create(checksum=checksum, result=result)
+                    _ensure_rev_transformation_row(checksum, result)
+                else:
+                    _ensure_rev_transformation_row(checksum, result)
+                MetaData.create(checksum=checksum, result=result, metadata=value)
 
         elif type_ == "irreproducible":
             try:
                 result = parse_checksum(request["result"], as_bytes=False)
             except (KeyError, ValueError):
                 raise DatabaseError("Malformed 'irreproducible' request") from None
-            in_transformations = False
-            try:
-                tf = Transformation[checksum]
-                tf_result = parse_checksum(tf.result, as_bytes=False)
-                in_transformations = True
-            except DoesNotExist:
-                pass
-            if in_transformations:
-                if tf_result != result:
-                    return web.Response(
-                        status=404,
-                        reason="Transformation does not have the irreproducible result",
-                    )
-            try:
-                metadata = MetaData[checksum].metadata
-                in_metadata = True
-            except DoesNotExist:
-                metadata = ""
-                in_metadata = False
-            IrreproducibleTransformation.create(
-                checksum=checksum, result=result, metadata=metadata
-            )
-            if in_transformations:
-                tf.delete_instance()
-            if in_metadata:
-                MetaData[checksum].delete_instance()
+            with db_atomic():
+                tf_row = _get_transformation_row(checksum)
+                if tf_row is not None:
+                    tf_result = parse_checksum(tf_row.result, as_bytes=False)
+                    if tf_result != result:
+                        return web.Response(
+                            status=404,
+                            text="ERROR: Transformation does not have the irreproducible result",
+                        )
+                metadata_row = _get_metadata_row(checksum)
+                if metadata_row is not None:
+                    metadata_result = parse_checksum(metadata_row.result, as_bytes=False)
+                    if metadata_result != result:
+                        return _conflict_response(
+                            "Stored metadata result does not match irreproducible result"
+                        )
+                    metadata = metadata_row.metadata
+                else:
+                    metadata = ""
+                IrreproducibleTransformation.create(
+                    checksum=checksum, result=result, metadata=metadata
+                )
+                if tf_row is not None:
+                    tf_row.delete_instance()
+                    _delete_rev_transformation_rows(checksum, result)
+                if metadata_row is not None:
+                    metadata_row.delete_instance()
         else:
             raise DatabaseError("Unknown request type")
         return "OK"

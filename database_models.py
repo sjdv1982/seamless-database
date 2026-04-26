@@ -7,6 +7,7 @@ from peewee import (
     CompositeKey,
     IntegrityError,
 )
+import sqlite3
 from playhouse.sqlite_ext import JSONField
 
 
@@ -134,6 +135,7 @@ class MetaData(BaseModel):
     # - execution time (also if failed)
     # - last recorded progress (if failed)
     checksum = ChecksumField(primary_key=True)
+    result = ChecksumField(index=True, unique=False)
     metadata = JSONField()
 
 
@@ -158,6 +160,7 @@ for model_class in _model_classes:
         model_class is Expression
         or model_class is SyntacticToSemantic
         or model_class is RevTransformation
+        or model_class is MetaData
     ):
         continue
     for fieldname, field in model_class._meta.fields.items():
@@ -175,6 +178,8 @@ def db_init(
     *,
     create_tables: bool = True,
 ):
+    if not _db.is_closed():
+        _db.close()
     if init_parameters is None:
         init_parameters = {}
     if connection_parameters is None:
@@ -182,7 +187,47 @@ def db_init(
     _db.init(filename, **init_parameters)
     _db.connect(**connection_parameters)
     if create_tables:
+        _ensure_meta_data_schema()
         _db.create_tables(_model_classes, safe=True)
 
 
 db_atomic = _db.atomic
+
+
+def _table_columns(table_name: str) -> list[str]:
+    cursor = _db.execute_sql(f"PRAGMA table_info({table_name})")
+    rows = cursor.fetchall()
+    return [row[1] for row in rows]
+
+
+def _table_rowcount(table_name: str) -> int:
+    cursor = _db.execute_sql(f"SELECT COUNT(*) FROM {table_name}")
+    row = cursor.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def _ensure_meta_data_schema() -> None:
+    table_name = MetaData._meta.table_name
+    try:
+        tables = set(_db.get_tables())
+    except sqlite3.OperationalError:
+        tables = set()
+    if table_name not in tables:
+        return
+
+    columns = _table_columns(table_name)
+    column_set = set(columns)
+    if len(columns) == 3 and column_set == {"checksum", "result", "metadata"}:
+        return
+    if len(columns) == 2 and column_set == {"checksum", "metadata"}:
+        if _table_rowcount(table_name) == 0:
+            _db.execute_sql(f"DROP TABLE {table_name}")
+            return
+        raise RuntimeError(
+            "Existing legacy 'meta_data' table is non-empty and cannot be upgraded automatically"
+        )
+
+    raise RuntimeError(
+        f"Unsupported schema for '{table_name}': columns={columns!r}"
+    )
