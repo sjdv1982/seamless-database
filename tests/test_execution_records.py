@@ -52,6 +52,25 @@ def _record(
     }
 
 
+def _minimal_record(
+    tf_checksum: str = TF_CHECKSUM,
+    result_checksum: str = RESULT_CHECKSUM,
+):
+    return {
+        "schema_version": 1,
+        "tf_checksum": tf_checksum,
+        "result_checksum": result_checksum,
+        "seamless_version": "test",
+        "execution_mode": "process",
+        "remote_target": None,
+        "wall_time_seconds": 0.5,
+        "cpu_time_user_seconds": 0.2,
+        "cpu_time_system_seconds": 0.1,
+        "memory_peak_bytes": 12345,
+        "gpu_memory_peak_bytes": None,
+    }
+
+
 def test_db_init_recreates_empty_legacy_metadata_table(tmp_path):
     dbfile = tmp_path / "legacy-empty.db"
     con = sqlite3.connect(dbfile)
@@ -119,6 +138,26 @@ def test_put_metadata_auto_creates_and_gets_record(tmp_path):
             )
             == record
         )
+    finally:
+        _close_db()
+
+
+def test_put_metadata_accepts_minimal_execution_record(tmp_path):
+    dbfile = tmp_path / "minimal-records.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    record = _minimal_record()
+    request = {
+        "type": "metadata",
+        "checksum": TF_CHECKSUM,
+        "result": RESULT_CHECKSUM,
+        "value": record,
+    }
+
+    try:
+        result = asyncio.run(server._put("metadata", TF_CHECKSUM, request))
+        assert result == "OK"
+        assert MetaData[TF_CHECKSUM].metadata == record
     finally:
         _close_db()
 
