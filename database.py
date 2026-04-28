@@ -688,9 +688,7 @@ class DatabaseServer:
             try:
                 celltype = request["celltype"]
                 path = json.dumps(request["path"])
-                hash_pattern = json.dumps(request.get("hash_pattern", ""))
                 target_celltype = request["target_celltype"]
-                target_hash_pattern = json.dumps(request.get("target_hash_pattern", ""))
             except KeyError:
                 raise DatabaseError("Malformed expression request")
             result = (
@@ -699,9 +697,7 @@ class DatabaseServer:
                     Expression.input_checksum == checksum,
                     Expression.path == path,
                     Expression.celltype == celltype,
-                    Expression.hash_pattern == hash_pattern,
                     Expression.target_celltype == target_celltype,
-                    Expression.target_hash_pattern == target_hash_pattern,
                 )
                 .execute()
             )
@@ -725,9 +721,7 @@ class DatabaseServer:
                     "checksum": expression.input_checksum,
                     "path": json.loads(expression.path),
                     "celltype": expression.celltype,
-                    "hash_pattern": json.loads(expression.hash_pattern),
                     "target_celltype": expression.target_celltype,
-                    "target_hash_pattern": json.loads(expression.target_hash_pattern),
                     "result": checksum,
                 }
                 result.append(expr)
@@ -805,9 +799,7 @@ class DatabaseServer:
                 value = parse_checksum(request["value"], as_bytes=False)
                 celltype = request["celltype"]
                 path = json.dumps(request["path"])
-                hash_pattern = json.dumps(request.get("hash_pattern", ""))
                 target_celltype = request["target_celltype"]
-                target_hash_pattern = json.dumps(request.get("target_hash_pattern", ""))
             except KeyError:
                 raise DatabaseError("Malformed expression request")
             try:
@@ -816,9 +808,7 @@ class DatabaseServer:
                 if len(request["path"]):
                     assert celltype in ("mixed", "plain", "binary")
                 assert len(celltype) <= 20
-                assert len(hash_pattern) <= 20
                 assert len(target_celltype) <= 20
-                assert len(target_hash_pattern) <= 20
             except AssertionError:
                 raise DatabaseError(
                     "Malformed expression request (constraint violation)"
@@ -827,9 +817,7 @@ class DatabaseServer:
                 input_checksum=checksum,
                 path=path,
                 celltype=celltype,
-                hash_pattern=hash_pattern,
                 target_celltype=target_celltype,
-                target_hash_pattern=target_hash_pattern,
                 result=value,
             )
 
