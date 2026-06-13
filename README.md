@@ -12,13 +12,14 @@ The database stores the following kinds of records:
 |-------|---------|
 | **Transformation** | Maps a transformation checksum to its result checksum |
 | **RevTransformation** | Reverse lookup: finds which transformations produced a given result |
-| **BufferInfo** | Stores buffer metadata (length, dtype, encoding, etc.) for a checksum |
+| **BufferInfo** | Legacy buffer metadata endpoint; retained for compatibility, not used by new validation/conversion code |
+| **HashType** | Stores the packed checksum classification word used by new HashType validation and conversion checks |
 | **SyntacticToSemantic** | Maps between syntactic and semantic checksums per celltype |
-| **Expression** | Caches expression evaluation results (input checksum + path + celltype → result checksum) |
+| **Expression** | Caches expression evaluation results keyed by `(input_checksum, path, celltype, target_celltype)` |
 | **MetaData** | Stores a canonical execution record for each successful, non-probe transformation |
 | **IrreproducibleTransformation** | Records transformations whose results are not reproducible; metadata is preserved on migration |
 
-All data is persisted in a single SQLite file (typically `seamless.db`). The current protocol version is **2.1**.
+All data is persisted in a single SQLite file (typically `seamless.db`). The current protocol version is **2.2**.
 
 ## Execution records
 
