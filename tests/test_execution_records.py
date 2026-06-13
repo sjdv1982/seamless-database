@@ -11,10 +11,11 @@ DATABASE_DIR = ROOT / "seamless-database"
 if str(DATABASE_DIR) not in sys.path:
     sys.path.insert(0, str(DATABASE_DIR))
 
-from database import DatabaseServer  # noqa: E402
+from database import DatabaseError, DatabaseServer  # noqa: E402
 from database_models import (  # noqa: E402
     BucketProbe,
     Expression,
+    HashType,
     MetaData,
     RevTransformation,
     Transformation,
@@ -31,6 +32,9 @@ BUCKET_CHECKSUM_2 = "4" * 64
 EXPR_INPUT_CHECKSUM = "5" * 64
 EXPR_RESULT_CHECKSUM = "6" * 64
 EXPR_OTHER_RESULT_CHECKSUM = "7" * 64
+HASH_TYPE_WORD = 4
+HASH_TYPE_OTHER_WORD = 5
+HASH_TYPE_INVALID_WORD = 8192
 
 
 def _close_db():
@@ -208,6 +212,50 @@ def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
             asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
             == EXPR_RESULT_CHECKSUM
         )
+    finally:
+        _close_db()
+
+
+def test_hash_type_roundtrip_and_rejects_conflicts(tmp_path):
+    dbfile = tmp_path / "hash-types.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "hash_type",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "value": HASH_TYPE_WORD,
+    }
+    conflict = {**request, "value": HASH_TYPE_OTHER_WORD}
+
+    try:
+        assert asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert HashType.select().count() == 1
+        assert (
+            asyncio.run(server._get("hash_type", EXPR_INPUT_CHECKSUM, request))
+            == HASH_TYPE_WORD
+        )
+        response = asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, conflict))
+        assert response.status == 409
+        assert HashType[EXPR_INPUT_CHECKSUM].hash_type == HASH_TYPE_WORD
+    finally:
+        _close_db()
+
+
+def test_hash_type_put_rejects_invalid_words(tmp_path):
+    dbfile = tmp_path / "invalid-hash-types.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "hash_type",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "value": HASH_TYPE_INVALID_WORD,
+    }
+
+    try:
+        with pytest.raises(DatabaseError, match="Malformed PUT hash_type request"):
+            asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request))
+        assert HashType.select().count() == 0
     finally:
         _close_db()
 

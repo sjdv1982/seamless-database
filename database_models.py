@@ -6,6 +6,7 @@ from peewee import (
     FixedCharField,
     CompositeKey,
     IntegrityError,
+    IntegerField,
 )
 import sqlite3
 from playhouse.sqlite_ext import JSONField
@@ -61,6 +62,21 @@ class BufferInfo(BaseModel):
     # store SeamlessBufferInfo as JSON
     checksum = ChecksumField(primary_key=True)
     buffer_info = TextField()
+
+
+class HashType(BaseModel):
+    checksum = ChecksumField(primary_key=True)
+    hash_type = IntegerField()
+
+    @classmethod
+    def create(cls, **kwargs):
+        try:
+            return super().create(**kwargs)
+        except IntegrityError:
+            instance = cls.get(checksum=kwargs["checksum"])
+            if instance.hash_type != kwargs["hash_type"]:
+                raise
+            return instance
 
 
 class SyntacticToSemantic(BaseModel):
@@ -163,6 +179,7 @@ _model_classes = [
     Transformation,
     RevTransformation,
     BufferInfo,
+    HashType,
     SyntacticToSemantic,
     Expression,
     MetaData,
@@ -173,6 +190,7 @@ _primary = {}
 for model_class in _model_classes:
     if (
         model_class is Expression
+        or model_class is HashType
         or model_class is SyntacticToSemantic
         or model_class is RevTransformation
         or model_class is MetaData

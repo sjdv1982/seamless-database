@@ -17,6 +17,7 @@ from database_models import (
     Transformation,
     RevTransformation,
     BufferInfo,
+    HashType,
     SyntacticToSemantic,
     Expression,
     MetaData,
@@ -52,6 +53,16 @@ def parse_checksum(checksum, as_bytes=False):
     if checksum is None:
         return
     raise TypeError(type(checksum))
+
+
+def _valid_hash_type_word(value):
+    if not isinstance(value, int):
+        return False
+    try:
+        from seamless.checksum.hash_type import HashType as CoreHashType
+    except ImportError:
+        return False
+    return CoreHashType.is_valid_word(value)
 
 
 # from the Seamless code
@@ -349,6 +360,7 @@ def build_sqlite_readonly_uri(path: str) -> str:
 types = (
     "protocol",
     "buffer_info",
+    "hash_type",
     "syntactic_to_semantic",
     "semantic_to_syntactic",
     "transformation",
@@ -370,7 +382,7 @@ def format_response(response, *, none_as_404=False):
         else:
             status = 404
             response = "ERROR: Unknown key"
-    elif isinstance(response, (bool, dict, list)):
+    elif isinstance(response, (bool, dict, list, int)):
         response = json.dumps(response)
     elif not isinstance(response, (str, bytes)):
         status = 400
@@ -594,6 +606,12 @@ class DatabaseServer:
             except DoesNotExist:
                 raise DatabaseError("Unknown key") from None
 
+        elif type_ == "hash_type":
+            try:
+                return HashType[checksum].hash_type
+            except DoesNotExist:
+                return None
+
         elif type_ == "semantic_to_syntactic":
             try:
                 celltype, subcelltype = request["celltype"], request["subcelltype"]
@@ -767,6 +785,20 @@ class DatabaseServer:
             except Exception:
                 raise DatabaseError("Malformed PUT buffer info request") from None
             BufferInfo.create(checksum=checksum, buffer_info=value)
+
+        elif type_ == "hash_type":
+            try:
+                value = request["value"]
+                if not _valid_hash_type_word(value):
+                    raise TypeError
+            except (KeyError, TypeError):
+                raise DatabaseError("Malformed PUT hash_type request") from None
+            try:
+                HashType.create(checksum=checksum, hash_type=value)
+            except IntegrityError:
+                return _conflict_response(
+                    "HashType already exists with different value"
+                )
 
         elif type_ == "semantic_to_syntactic":
             try:
