@@ -14,6 +14,7 @@ if str(DATABASE_DIR) not in sys.path:
 from database import DatabaseServer  # noqa: E402
 from database_models import (  # noqa: E402
     BucketProbe,
+    Expression,
     MetaData,
     RevTransformation,
     Transformation,
@@ -27,6 +28,9 @@ TF_CHECKSUM = "1" * 64
 RESULT_CHECKSUM = "2" * 64
 BUCKET_CHECKSUM = "3" * 64
 BUCKET_CHECKSUM_2 = "4" * 64
+EXPR_INPUT_CHECKSUM = "5" * 64
+EXPR_RESULT_CHECKSUM = "6" * 64
+EXPR_OTHER_RESULT_CHECKSUM = "7" * 64
 
 
 def _close_db():
@@ -137,6 +141,72 @@ def test_put_metadata_auto_creates_and_gets_record(tmp_path):
                 )
             )
             == record
+        )
+    finally:
+        _close_db()
+
+
+def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
+    dbfile = tmp_path / "expressions.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "a",
+        "celltype": "plain",
+        "target_celltype": "mixed",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+
+    try:
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert Expression.select().count() == 1
+        assert (
+            asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
+            == EXPR_RESULT_CHECKSUM
+        )
+        assert asyncio.run(
+            server._get(
+                "rev_expression",
+                EXPR_RESULT_CHECKSUM,
+                {"type": "rev_expression", "checksum": EXPR_RESULT_CHECKSUM},
+            )
+        ) == [
+            {
+                "checksum": EXPR_INPUT_CHECKSUM,
+                "path": "a",
+                "celltype": "plain",
+                "target_celltype": "mixed",
+                "result": EXPR_RESULT_CHECKSUM,
+            }
+        ]
+    finally:
+        _close_db()
+
+
+def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
+    dbfile = tmp_path / "expression-conflict.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "[0]",
+        "celltype": "bytes",
+        "target_celltype": "int",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+    conflict = {**request, "value": EXPR_OTHER_RESULT_CHECKSUM}
+
+    try:
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        response = asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, conflict))
+        assert response.status == 409
+        assert (
+            asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
+            == EXPR_RESULT_CHECKSUM
         )
     finally:
         _close_db()

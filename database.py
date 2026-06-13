@@ -9,7 +9,7 @@ import socket
 import sys
 import time
 from urllib.parse import quote
-from peewee import DoesNotExist
+from peewee import DoesNotExist, IntegrityError
 
 from database_models import (
     db_init,
@@ -151,6 +151,12 @@ def _normalize_metadata_value(value):
         if isinstance(value, dict):
             return value
     raise TypeError(type(value))
+
+
+def _normalize_expression_path_payload(path):
+    if not isinstance(path, str):
+        raise TypeError(type(path))
+    return json.dumps(path)
 
 
 def _normalize_freshness_tokens(value):
@@ -687,9 +693,9 @@ class DatabaseServer:
         elif type_ == "expression":
             try:
                 celltype = request["celltype"]
-                path = json.dumps(request["path"])
+                path = _normalize_expression_path_payload(request["path"])
                 target_celltype = request["target_celltype"]
-            except KeyError:
+            except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             result = (
                 Expression.select()
@@ -798,28 +804,31 @@ class DatabaseServer:
             try:
                 value = parse_checksum(request["value"], as_bytes=False)
                 celltype = request["celltype"]
-                path = json.dumps(request["path"])
+                path = _normalize_expression_path_payload(request["path"])
                 target_celltype = request["target_celltype"]
-            except KeyError:
+            except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             try:
                 # assert celltype in celltypes TODO? also for target_celltype
                 assert len(path) <= 100
-                if len(request["path"]):
-                    assert celltype in ("mixed", "plain", "binary")
                 assert len(celltype) <= 20
                 assert len(target_celltype) <= 20
             except AssertionError:
                 raise DatabaseError(
                     "Malformed expression request (constraint violation)"
                 )
-            Expression.create(
-                input_checksum=checksum,
-                path=path,
-                celltype=celltype,
-                target_celltype=target_celltype,
-                result=value,
-            )
+            try:
+                Expression.create(
+                    input_checksum=checksum,
+                    path=path,
+                    celltype=celltype,
+                    target_celltype=target_celltype,
+                    result=value,
+                )
+            except IntegrityError:
+                return _conflict_response(
+                    "Expression already exists with different result"
+                )
 
         elif type_ == "metadata":
             try:
@@ -1064,4 +1073,3 @@ If it doesn't exist, a new file is created.""",
 BUCKET_KINDS = frozenset(
     ("node", "environment", "node_env", "queue", "queue_node")
 )
-

@@ -122,8 +122,9 @@ class Expression(BaseModel):
             ):
                 kwargs2[k] = kwargs[k]
             instance = cls.get(**kwargs2)
-            instance.result = kwargs["result"]
-            instance.save()
+            if instance.result != kwargs["result"]:
+                raise
+            return instance
 
 
 class MetaData(BaseModel):
