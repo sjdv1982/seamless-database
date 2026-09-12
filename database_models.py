@@ -108,8 +108,8 @@ class Expression(BaseModel):
 
     input_checksum = ChecksumField()
     path = CharField(max_length=100)
+    input_celltype = CharField(max_length=20)
     celltype = CharField(max_length=20)
-    target_celltype = CharField(max_length=20)
     validator = ChecksumField(null=True)
     validator_language = CharField(max_length=20, null=True)
     result = ChecksumField(index=True, unique=False)
@@ -120,8 +120,8 @@ class Expression(BaseModel):
         primary_key = CompositeKey(
             "input_checksum",
             "path",
+            "input_celltype",
             "celltype",
-            "target_celltype",
         )
 
     @classmethod
@@ -133,8 +133,8 @@ class Expression(BaseModel):
             for k in (
                 "input_checksum",
                 "path",
+                "input_celltype",
                 "celltype",
-                "target_celltype",
             ):
                 kwargs2[k] = kwargs[k]
             instance = cls.get(**kwargs2)

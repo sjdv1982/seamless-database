@@ -710,9 +710,9 @@ class DatabaseServer:
 
         elif type_ == "expression":
             try:
-                celltype = request["celltype"]
+                input_celltype = request["input_celltype"]
                 path = _normalize_expression_path_payload(request["path"])
-                target_celltype = request["target_celltype"]
+                celltype = request["celltype"]
             except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             result = (
@@ -720,8 +720,8 @@ class DatabaseServer:
                 .where(
                     Expression.input_checksum == checksum,
                     Expression.path == path,
+                    Expression.input_celltype == input_celltype,
                     Expression.celltype == celltype,
-                    Expression.target_celltype == target_celltype,
                 )
                 .execute()
             )
@@ -744,8 +744,8 @@ class DatabaseServer:
                 expr = {
                     "checksum": expression.input_checksum,
                     "path": json.loads(expression.path),
+                    "input_celltype": expression.input_celltype,
                     "celltype": expression.celltype,
-                    "target_celltype": expression.target_celltype,
                     "result": checksum,
                 }
                 result.append(expr)
@@ -835,16 +835,16 @@ class DatabaseServer:
         elif type_ == "expression":
             try:
                 value = parse_checksum(request["value"], as_bytes=False)
-                celltype = request["celltype"]
+                input_celltype = request["input_celltype"]
                 path = _normalize_expression_path_payload(request["path"])
-                target_celltype = request["target_celltype"]
+                celltype = request["celltype"]
             except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             try:
-                # assert celltype in celltypes TODO? also for target_celltype
+                # assert input_celltype in celltypes TODO? also for celltype
                 assert len(path) <= 100
+                assert len(input_celltype) <= 20
                 assert len(celltype) <= 20
-                assert len(target_celltype) <= 20
             except AssertionError:
                 raise DatabaseError(
                     "Malformed expression request (constraint violation)"
@@ -853,8 +853,8 @@ class DatabaseServer:
                 Expression.create(
                     input_checksum=checksum,
                     path=path,
+                    input_celltype=input_celltype,
                     celltype=celltype,
-                    target_celltype=target_celltype,
                     result=value,
                 )
             except IntegrityError:

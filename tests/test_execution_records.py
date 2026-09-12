@@ -158,8 +158,8 @@ def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
         "type": "expression",
         "checksum": EXPR_INPUT_CHECKSUM,
         "path": "a",
-        "celltype": "plain",
-        "target_celltype": "mixed",
+        'input_celltype': "plain",
+        'celltype': "mixed",
         "value": EXPR_RESULT_CHECKSUM,
     }
 
@@ -180,8 +180,8 @@ def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
             {
                 "checksum": EXPR_INPUT_CHECKSUM,
                 "path": "a",
-                "celltype": "plain",
-                "target_celltype": "mixed",
+                'input_celltype': "plain",
+                'celltype': "mixed",
                 "result": EXPR_RESULT_CHECKSUM,
             }
         ]
@@ -197,8 +197,8 @@ def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
         "type": "expression",
         "checksum": EXPR_INPUT_CHECKSUM,
         "path": "[0]",
-        "celltype": "bytes",
-        "target_celltype": "int",
+        'input_celltype': "bytes",
+        'celltype': "int",
         "value": EXPR_RESULT_CHECKSUM,
     }
     conflict = {**request, "value": EXPR_OTHER_RESULT_CHECKSUM}
