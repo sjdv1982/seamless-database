@@ -15,11 +15,25 @@ The database stores the following kinds of records:
 | **BufferInfo** | Legacy buffer metadata endpoint; retained for compatibility, not used by new validation/conversion code |
 | **HashType** | Stores the packed checksum classification word used by new HashType validation and conversion checks |
 | **SyntacticToSemantic** | Maps between syntactic and semantic checksums per celltype |
-| **Expression** | Caches expression evaluation results keyed by `(input_checksum, path, celltype, target_celltype)` |
+| **Expression** | Caches expression evaluation results keyed by `(input_checksum, path, input_celltype, celltype)` |
 | **MetaData** | Stores a canonical execution record for each successful, non-probe transformation |
 | **IrreproducibleTransformation** | Records transformations whose results are not reproducible; metadata is preserved on migration |
 
 All data is persisted in a single SQLite file (typically `seamless.db`). The current protocol version is **2.2**.
+
+## Expression cache schema
+
+Expression `input_celltype` describes the input checksum's interpretation;
+`celltype` describes the produced result. Both are part of the composite cache
+key. Database, jobserver, remote client, and Dask payloads use those same names.
+The unreleased old `celltype`/`target_celltype` keys are not accepted aliases.
+Existing development caches need these statements, in order, or a recreated
+expression cache table:
+
+```sql
+ALTER TABLE expression RENAME COLUMN celltype TO input_celltype;
+ALTER TABLE expression RENAME COLUMN target_celltype TO celltype;
+```
 
 ## Execution records
 
