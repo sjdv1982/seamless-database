@@ -216,6 +216,37 @@ def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
         _close_db()
 
 
+def test_expression_records_differing_only_in_celltypes_coexist(tmp_path):
+    dbfile = tmp_path / "expression-key.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "a",
+        'input_celltype': "str",
+        'celltype': "int",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+    requests = [
+        request,
+        {**request, 'input_celltype': "text", "value": EXPR_OTHER_RESULT_CHECKSUM},
+        {**request, 'celltype': "float", "value": "8" * 64},
+    ]
+
+    try:
+        for item in requests:
+            assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, item)) == "OK"
+        assert Expression.select().count() == len(requests)
+        for item in requests:
+            assert (
+                asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, item))
+                == item["value"]
+            )
+    finally:
+        _close_db()
+
+
 def test_hash_type_roundtrip_and_rejects_conflicts(tmp_path):
     dbfile = tmp_path / "hash-types.db"
     _init_db(dbfile)
