@@ -70,12 +70,26 @@ class HashType(BaseModel):
 
     @classmethod
     def create(cls, **kwargs):
-        try:
-            return super().create(**kwargs)
-        except IntegrityError:
-            instance = cls.get(checksum=kwargs["checksum"])
-            if instance.hash_type != kwargs["hash_type"]:
-                raise
+        from seamless.checksum.hash_type import _hash_type_implies, unpack
+
+        with cls._meta.database.atomic("IMMEDIATE"):
+            instance = cls.get_or_none(checksum=kwargs["checksum"])
+            if instance is None:
+                return super().create(**kwargs)
+            stored, incoming = instance.hash_type, kwargs["hash_type"]
+            if stored == incoming or _hash_type_implies(
+                unpack(stored), unpack(incoming)
+            ):
+                return instance
+            if not _hash_type_implies(unpack(incoming), unpack(stored)):
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Conflicting HashType for %s", kwargs["checksum"]
+                )
+                raise IntegrityError("Conflicting HashType")
+            instance.hash_type = incoming
+            instance.save()
             return instance
 
 
