@@ -58,12 +58,6 @@ class RevTransformation(BaseModel):
     checksum = ChecksumField(unique=False)
 
 
-class BufferInfo(BaseModel):
-    # store SeamlessBufferInfo as JSON
-    checksum = ChecksumField(primary_key=True)
-    buffer_info = TextField()
-
-
 class HashType(BaseModel):
     checksum = ChecksumField(primary_key=True)
     hash_type = IntegerField()
@@ -192,7 +186,6 @@ class IrreproducibleTransformation(BaseModel):
 _model_classes = [
     Transformation,
     RevTransformation,
-    BufferInfo,
     HashType,
     SyntacticToSemantic,
     Expression,

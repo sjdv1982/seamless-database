@@ -16,7 +16,6 @@ from database_models import (
     db_atomic,
     Transformation,
     RevTransformation,
-    BufferInfo,
     HashType,
     SyntacticToSemantic,
     Expression,
@@ -63,82 +62,6 @@ def _valid_hash_type_word(value):
     except ImportError:
         return False
     return CoreHashType.is_valid_word(value)
-
-
-# from the Seamless code
-class SeamlessBufferInfo:
-    __slots__ = (
-        "checksum",
-        "length",
-        "is_utf8",
-        "is_json",
-        "json_type",
-        "is_json_numeric_array",
-        "is_json_numeric_scalar",
-        "is_numpy",
-        "dtype",
-        "shape",
-        "is_seamless_mixed",
-        "str2text",
-        "text2str",
-        "binary2bytes",
-        "bytes2binary",
-        "binary2json",
-        "json2binary",
-    )
-
-    def __init__(self, checksum, params: dict = {}):
-        for slot in self.__slots__:
-            setattr(self, slot, params.get(slot))
-        if isinstance(checksum, str):
-            checksum = parse_checksum(checksum)
-        self.checksum = checksum
-
-    def __setattr__(self, attr, value):
-        if value is not None:
-            if attr == "length":
-                if not isinstance(value, int):
-                    raise TypeError(type(value))
-                if not value >= 0:
-                    raise ValueError
-            if attr.startswith("is_"):
-                if not isinstance(value, bool):
-                    raise TypeError(type(value))
-        if attr.find("2") > -1 and value is not None:
-            if isinstance(value, bytes):
-                value = value.hex()
-        super().__setattr__(attr, value)
-
-    def __setitem__(self, item, value):
-        return setattr(self, item, value)
-
-    def __getitem__(self, item):
-        return getattr(self, item)
-
-    def update(self, other):
-        if not isinstance(other, SeamlessBufferInfo):
-            raise TypeError
-        for attr in self.__slots__:
-            v = getattr(other, attr)
-            if v is not None:
-                setattr(self, attr, v)
-
-    def get(self, attr, default=None):
-        value = getattr(self, attr)
-        if value is None:
-            return default
-        else:
-            return value
-
-    def as_dict(self):
-        result = {}
-        for attr in self.__slots__:
-            if attr == "checksum":
-                continue
-            v = getattr(self, attr)
-            if v is not None:
-                result[attr] = v
-        return result
 
 
 def err(*args, **kwargs):
@@ -359,7 +282,6 @@ def build_sqlite_readonly_uri(path: str) -> str:
 
 types = (
     "protocol",
-    "buffer_info",
     "hash_type",
     "syntactic_to_semantic",
     "semantic_to_syntactic",
@@ -600,13 +522,7 @@ class DatabaseServer:
             pass
 
     async def _get(self, type_, checksum, request):
-        if type_ == "buffer_info":
-            try:
-                return json.loads(BufferInfo[checksum].buffer_info)
-            except DoesNotExist:
-                raise DatabaseError("Unknown key") from None
-
-        elif type_ == "hash_type":
+        if type_ == "hash_type":
             try:
                 return HashType[checksum].hash_type
             except DoesNotExist:
@@ -769,24 +685,7 @@ class DatabaseServer:
 
     async def _put(self, type_, checksum, request):
 
-        if type_ == "buffer_info":
-            try:
-                value = request["value"]
-                if not isinstance(value, dict):
-                    raise TypeError
-                SeamlessBufferInfo(checksum, value)
-                try:
-                    existing = json.loads(BufferInfo[checksum].buffer_info)
-                    existing.update(value)
-                    value = existing
-                except DoesNotExist:
-                    pass
-                value = json.dumps(value, sort_keys=True, indent=2)
-            except Exception:
-                raise DatabaseError("Malformed PUT buffer info request") from None
-            BufferInfo.create(checksum=checksum, buffer_info=value)
-
-        elif type_ == "hash_type":
+        if type_ == "hash_type":
             try:
                 value = request["value"]
                 if not _valid_hash_type_word(value):

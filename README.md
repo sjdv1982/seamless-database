@@ -12,7 +12,6 @@ The database stores the following kinds of records:
 |-------|---------|
 | **Transformation** | Maps a transformation checksum to its result checksum |
 | **RevTransformation** | Reverse lookup: finds which transformations produced a given result |
-| **BufferInfo** | Legacy buffer metadata endpoint; retained for compatibility, not used by new validation/conversion code |
 | **HashType** | Stores the packed checksum classification word used by new HashType validation and conversion checks |
 | **SyntacticToSemantic** | Maps between syntactic and semantic checksums per celltype |
 | **Expression** | Caches expression evaluation results keyed by `(input_checksum, path, input_celltype, celltype)` |
