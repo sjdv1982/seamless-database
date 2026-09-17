@@ -9,14 +9,14 @@ import socket
 import sys
 import time
 from urllib.parse import quote
-from peewee import DoesNotExist
+from peewee import DoesNotExist, IntegrityError
 
 from database_models import (
     db_init,
     db_atomic,
     Transformation,
     RevTransformation,
-    BufferInfo,
+    HashType,
     SyntacticToSemantic,
     Expression,
     MetaData,
@@ -54,80 +54,14 @@ def parse_checksum(checksum, as_bytes=False):
     raise TypeError(type(checksum))
 
 
-# from the Seamless code
-class SeamlessBufferInfo:
-    __slots__ = (
-        "checksum",
-        "length",
-        "is_utf8",
-        "is_json",
-        "json_type",
-        "is_json_numeric_array",
-        "is_json_numeric_scalar",
-        "is_numpy",
-        "dtype",
-        "shape",
-        "is_seamless_mixed",
-        "str2text",
-        "text2str",
-        "binary2bytes",
-        "bytes2binary",
-        "binary2json",
-        "json2binary",
-    )
-
-    def __init__(self, checksum, params: dict = {}):
-        for slot in self.__slots__:
-            setattr(self, slot, params.get(slot))
-        if isinstance(checksum, str):
-            checksum = parse_checksum(checksum)
-        self.checksum = checksum
-
-    def __setattr__(self, attr, value):
-        if value is not None:
-            if attr == "length":
-                if not isinstance(value, int):
-                    raise TypeError(type(value))
-                if not value >= 0:
-                    raise ValueError
-            if attr.startswith("is_"):
-                if not isinstance(value, bool):
-                    raise TypeError(type(value))
-        if attr.find("2") > -1 and value is not None:
-            if isinstance(value, bytes):
-                value = value.hex()
-        super().__setattr__(attr, value)
-
-    def __setitem__(self, item, value):
-        return setattr(self, item, value)
-
-    def __getitem__(self, item):
-        return getattr(self, item)
-
-    def update(self, other):
-        if not isinstance(other, SeamlessBufferInfo):
-            raise TypeError
-        for attr in self.__slots__:
-            v = getattr(other, attr)
-            if v is not None:
-                setattr(self, attr, v)
-
-    def get(self, attr, default=None):
-        value = getattr(self, attr)
-        if value is None:
-            return default
-        else:
-            return value
-
-    def as_dict(self):
-        result = {}
-        for attr in self.__slots__:
-            if attr == "checksum":
-                continue
-            v = getattr(self, attr)
-            if v is not None:
-                result[attr] = v
-        return result
+def _valid_hash_type_word(value):
+    if not isinstance(value, int):
+        return False
+    try:
+        from seamless.checksum.hash_type import HashType as CoreHashType
+    except ImportError:
+        return False
+    return CoreHashType.is_valid_word(value)
 
 
 def err(*args, **kwargs):
@@ -151,6 +85,12 @@ def _normalize_metadata_value(value):
         if isinstance(value, dict):
             return value
     raise TypeError(type(value))
+
+
+def _normalize_expression_path_payload(path):
+    if not isinstance(path, str):
+        raise TypeError(type(path))
+    return json.dumps(path)
 
 
 def _normalize_freshness_tokens(value):
@@ -342,7 +282,7 @@ def build_sqlite_readonly_uri(path: str) -> str:
 
 types = (
     "protocol",
-    "buffer_info",
+    "hash_type",
     "syntactic_to_semantic",
     "semantic_to_syntactic",
     "transformation",
@@ -364,7 +304,7 @@ def format_response(response, *, none_as_404=False):
         else:
             status = 404
             response = "ERROR: Unknown key"
-    elif isinstance(response, (bool, dict, list)):
+    elif isinstance(response, (bool, dict, list, int)):
         response = json.dumps(response)
     elif not isinstance(response, (str, bytes)):
         status = 400
@@ -582,11 +522,11 @@ class DatabaseServer:
             pass
 
     async def _get(self, type_, checksum, request):
-        if type_ == "buffer_info":
+        if type_ == "hash_type":
             try:
-                return json.loads(BufferInfo[checksum].buffer_info)
+                return HashType[checksum].hash_type
             except DoesNotExist:
-                raise DatabaseError("Unknown key") from None
+                return None
 
         elif type_ == "semantic_to_syntactic":
             try:
@@ -686,18 +626,18 @@ class DatabaseServer:
 
         elif type_ == "expression":
             try:
+                input_celltype = request["input_celltype"]
+                path = _normalize_expression_path_payload(request["path"])
                 celltype = request["celltype"]
-                path = json.dumps(request["path"])
-                target_celltype = request["target_celltype"]
-            except KeyError:
+            except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             result = (
                 Expression.select()
                 .where(
                     Expression.input_checksum == checksum,
                     Expression.path == path,
+                    Expression.input_celltype == input_celltype,
                     Expression.celltype == celltype,
-                    Expression.target_celltype == target_celltype,
                 )
                 .execute()
             )
@@ -720,8 +660,8 @@ class DatabaseServer:
                 expr = {
                     "checksum": expression.input_checksum,
                     "path": json.loads(expression.path),
+                    "input_celltype": expression.input_celltype,
                     "celltype": expression.celltype,
-                    "target_celltype": expression.target_celltype,
                     "result": checksum,
                 }
                 result.append(expr)
@@ -745,22 +685,19 @@ class DatabaseServer:
 
     async def _put(self, type_, checksum, request):
 
-        if type_ == "buffer_info":
+        if type_ == "hash_type":
             try:
                 value = request["value"]
-                if not isinstance(value, dict):
+                if not _valid_hash_type_word(value):
                     raise TypeError
-                SeamlessBufferInfo(checksum, value)
-                try:
-                    existing = json.loads(BufferInfo[checksum].buffer_info)
-                    existing.update(value)
-                    value = existing
-                except DoesNotExist:
-                    pass
-                value = json.dumps(value, sort_keys=True, indent=2)
-            except Exception:
-                raise DatabaseError("Malformed PUT buffer info request") from None
-            BufferInfo.create(checksum=checksum, buffer_info=value)
+            except (KeyError, TypeError):
+                raise DatabaseError("Malformed PUT hash_type request") from None
+            try:
+                HashType.create(checksum=checksum, hash_type=value)
+            except IntegrityError:
+                return _conflict_response(
+                    "HashType already exists with different value"
+                )
 
         elif type_ == "semantic_to_syntactic":
             try:
@@ -797,29 +734,32 @@ class DatabaseServer:
         elif type_ == "expression":
             try:
                 value = parse_checksum(request["value"], as_bytes=False)
+                input_celltype = request["input_celltype"]
+                path = _normalize_expression_path_payload(request["path"])
                 celltype = request["celltype"]
-                path = json.dumps(request["path"])
-                target_celltype = request["target_celltype"]
-            except KeyError:
+            except (KeyError, TypeError):
                 raise DatabaseError("Malformed expression request")
             try:
-                # assert celltype in celltypes TODO? also for target_celltype
+                # assert input_celltype in celltypes TODO? also for celltype
                 assert len(path) <= 100
-                if len(request["path"]):
-                    assert celltype in ("mixed", "plain", "binary")
+                assert len(input_celltype) <= 20
                 assert len(celltype) <= 20
-                assert len(target_celltype) <= 20
             except AssertionError:
                 raise DatabaseError(
                     "Malformed expression request (constraint violation)"
                 )
-            Expression.create(
-                input_checksum=checksum,
-                path=path,
-                celltype=celltype,
-                target_celltype=target_celltype,
-                result=value,
-            )
+            try:
+                Expression.create(
+                    input_checksum=checksum,
+                    path=path,
+                    input_celltype=input_celltype,
+                    celltype=celltype,
+                    result=value,
+                )
+            except IntegrityError:
+                return _conflict_response(
+                    "Expression already exists with different result"
+                )
 
         elif type_ == "metadata":
             try:
@@ -1064,4 +1004,3 @@ If it doesn't exist, a new file is created.""",
 BUCKET_KINDS = frozenset(
     ("node", "environment", "node_env", "queue", "queue_node")
 )
-

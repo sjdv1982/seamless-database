@@ -11,9 +11,11 @@ DATABASE_DIR = ROOT / "seamless-database"
 if str(DATABASE_DIR) not in sys.path:
     sys.path.insert(0, str(DATABASE_DIR))
 
-from database import DatabaseServer  # noqa: E402
+from database import DatabaseError, DatabaseServer  # noqa: E402
 from database_models import (  # noqa: E402
     BucketProbe,
+    Expression,
+    HashType,
     MetaData,
     RevTransformation,
     Transformation,
@@ -27,6 +29,12 @@ TF_CHECKSUM = "1" * 64
 RESULT_CHECKSUM = "2" * 64
 BUCKET_CHECKSUM = "3" * 64
 BUCKET_CHECKSUM_2 = "4" * 64
+EXPR_INPUT_CHECKSUM = "5" * 64
+EXPR_RESULT_CHECKSUM = "6" * 64
+EXPR_OTHER_RESULT_CHECKSUM = "7" * 64
+HASH_TYPE_WORD = 4
+HASH_TYPE_OTHER_WORD = 5
+HASH_TYPE_INVALID_WORD = 8192
 
 
 def _close_db():
@@ -138,6 +146,147 @@ def test_put_metadata_auto_creates_and_gets_record(tmp_path):
             )
             == record
         )
+    finally:
+        _close_db()
+
+
+def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
+    dbfile = tmp_path / "expressions.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "a",
+        'input_celltype': "plain",
+        'celltype': "mixed",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+
+    try:
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert Expression.select().count() == 1
+        assert (
+            asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
+            == EXPR_RESULT_CHECKSUM
+        )
+        assert asyncio.run(
+            server._get(
+                "rev_expression",
+                EXPR_RESULT_CHECKSUM,
+                {"type": "rev_expression", "checksum": EXPR_RESULT_CHECKSUM},
+            )
+        ) == [
+            {
+                "checksum": EXPR_INPUT_CHECKSUM,
+                "path": "a",
+                'input_celltype': "plain",
+                'celltype': "mixed",
+                "result": EXPR_RESULT_CHECKSUM,
+            }
+        ]
+    finally:
+        _close_db()
+
+
+def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
+    dbfile = tmp_path / "expression-conflict.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "[0]",
+        'input_celltype': "bytes",
+        'celltype': "int",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+    conflict = {**request, "value": EXPR_OTHER_RESULT_CHECKSUM}
+
+    try:
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        response = asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, conflict))
+        assert response.status == 409
+        assert (
+            asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
+            == EXPR_RESULT_CHECKSUM
+        )
+    finally:
+        _close_db()
+
+
+def test_expression_records_differing_only_in_celltypes_coexist(tmp_path):
+    dbfile = tmp_path / "expression-key.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": "a",
+        'input_celltype': "str",
+        'celltype': "int",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+    requests = [
+        request,
+        {**request, 'input_celltype': "text", "value": EXPR_OTHER_RESULT_CHECKSUM},
+        {**request, 'celltype': "float", "value": "8" * 64},
+    ]
+
+    try:
+        for item in requests:
+            assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, item)) == "OK"
+        assert Expression.select().count() == len(requests)
+        for item in requests:
+            assert (
+                asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, item))
+                == item["value"]
+            )
+    finally:
+        _close_db()
+
+
+def test_hash_type_roundtrip_and_rejects_conflicts(tmp_path):
+    dbfile = tmp_path / "hash-types.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "hash_type",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "value": HASH_TYPE_WORD,
+    }
+    conflict = {**request, "value": HASH_TYPE_OTHER_WORD}
+
+    try:
+        assert asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert HashType.select().count() == 1
+        assert (
+            asyncio.run(server._get("hash_type", EXPR_INPUT_CHECKSUM, request))
+            == HASH_TYPE_WORD
+        )
+        response = asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, conflict))
+        assert response.status == 409
+        assert HashType[EXPR_INPUT_CHECKSUM].hash_type == HASH_TYPE_WORD
+    finally:
+        _close_db()
+
+
+def test_hash_type_put_rejects_invalid_words(tmp_path):
+    dbfile = tmp_path / "invalid-hash-types.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    request = {
+        "type": "hash_type",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "value": HASH_TYPE_INVALID_WORD,
+    }
+
+    try:
+        with pytest.raises(DatabaseError, match="Malformed PUT hash_type request"):
+            asyncio.run(server._put("hash_type", EXPR_INPUT_CHECKSUM, request))
+        assert HashType.select().count() == 0
     finally:
         _close_db()
 

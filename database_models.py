@@ -6,6 +6,7 @@ from peewee import (
     FixedCharField,
     CompositeKey,
     IntegrityError,
+    IntegerField,
 )
 import sqlite3
 from playhouse.sqlite_ext import JSONField
@@ -57,10 +58,33 @@ class RevTransformation(BaseModel):
     checksum = ChecksumField(unique=False)
 
 
-class BufferInfo(BaseModel):
-    # store SeamlessBufferInfo as JSON
+class HashType(BaseModel):
     checksum = ChecksumField(primary_key=True)
-    buffer_info = TextField()
+    hash_type = IntegerField()
+
+    @classmethod
+    def create(cls, **kwargs):
+        from seamless.checksum.hash_type import _hash_type_implies, unpack
+
+        with cls._meta.database.atomic("IMMEDIATE"):
+            instance = cls.get_or_none(checksum=kwargs["checksum"])
+            if instance is None:
+                return super().create(**kwargs)
+            stored, incoming = instance.hash_type, kwargs["hash_type"]
+            if stored == incoming or _hash_type_implies(
+                unpack(stored), unpack(incoming)
+            ):
+                return instance
+            if not _hash_type_implies(unpack(incoming), unpack(stored)):
+                import logging
+
+                logging.getLogger(__name__).error(
+                    "Conflicting HashType for %s", kwargs["checksum"]
+                )
+                raise IntegrityError("Conflicting HashType")
+            instance.hash_type = incoming
+            instance.save()
+            return instance
 
 
 class SyntacticToSemantic(BaseModel):
@@ -92,8 +116,8 @@ class Expression(BaseModel):
 
     input_checksum = ChecksumField()
     path = CharField(max_length=100)
+    input_celltype = CharField(max_length=20)
     celltype = CharField(max_length=20)
-    target_celltype = CharField(max_length=20)
     validator = ChecksumField(null=True)
     validator_language = CharField(max_length=20, null=True)
     result = ChecksumField(index=True, unique=False)
@@ -104,8 +128,8 @@ class Expression(BaseModel):
         primary_key = CompositeKey(
             "input_checksum",
             "path",
+            "input_celltype",
             "celltype",
-            "target_celltype",
         )
 
     @classmethod
@@ -117,13 +141,14 @@ class Expression(BaseModel):
             for k in (
                 "input_checksum",
                 "path",
+                "input_celltype",
                 "celltype",
-                "target_celltype",
             ):
                 kwargs2[k] = kwargs[k]
             instance = cls.get(**kwargs2)
-            instance.result = kwargs["result"]
-            instance.save()
+            if instance.result != kwargs["result"]:
+                raise
+            return instance
 
 
 class MetaData(BaseModel):
@@ -161,7 +186,7 @@ class IrreproducibleTransformation(BaseModel):
 _model_classes = [
     Transformation,
     RevTransformation,
-    BufferInfo,
+    HashType,
     SyntacticToSemantic,
     Expression,
     MetaData,
@@ -172,6 +197,7 @@ _primary = {}
 for model_class in _model_classes:
     if (
         model_class is Expression
+        or model_class is HashType
         or model_class is SyntacticToSemantic
         or model_class is RevTransformation
         or model_class is MetaData
