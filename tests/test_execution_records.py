@@ -189,6 +189,44 @@ def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
         _close_db()
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="contract ahead of code: long Expression paths need indirect storage",
+)
+def test_expression_path_has_no_storage_length_limit(tmp_path):
+    dbfile = tmp_path / "expression-long-path.db"
+    _init_db(dbfile)
+    server = DatabaseServer("127.0.0.1", 0)
+    path = "['" + "segment/" * 1000 + "leaf']"
+    request = {
+        "type": "expression",
+        "checksum": EXPR_INPUT_CHECKSUM,
+        "path": path,
+        "input_celltype": "plain",
+        "celltype": "mixed",
+        "value": EXPR_RESULT_CHECKSUM,
+    }
+
+    try:
+        assert asyncio.run(server._put("expression", EXPR_INPUT_CHECKSUM, request)) == "OK"
+        assert (
+            asyncio.run(server._get("expression", EXPR_INPUT_CHECKSUM, request))
+            == EXPR_RESULT_CHECKSUM
+        )
+        reverse_rows = asyncio.run(
+            server._get(
+                "rev_expression",
+                EXPR_RESULT_CHECKSUM,
+                {"type": "rev_expression", "checksum": EXPR_RESULT_CHECKSUM},
+            )
+        )
+        assert isinstance(reverse_rows, list)
+        assert len(reverse_rows) == 1
+        assert reverse_rows[0]["path"] == path
+    finally:
+        _close_db()
+
+
 def test_expression_put_is_idempotent_and_rejects_conflicts(tmp_path):
     dbfile = tmp_path / "expression-conflict.db"
     _init_db(dbfile)
