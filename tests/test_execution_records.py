@@ -189,10 +189,6 @@ def test_expression_result_roundtrip_and_reverse_lookup(tmp_path):
         _close_db()
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="contract ahead of code: long Expression paths need indirect storage",
-)
 def test_expression_path_has_no_storage_length_limit(tmp_path):
     dbfile = tmp_path / "expression-long-path.db"
     _init_db(dbfile)

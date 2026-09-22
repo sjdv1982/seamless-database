@@ -115,7 +115,7 @@ class SyntacticToSemantic(BaseModel):
 class Expression(BaseModel):
 
     input_checksum = ChecksumField()
-    path = CharField(max_length=100)
+    path = TextField()
     input_celltype = CharField(max_length=20)
     celltype = CharField(max_length=20)
     validator = ChecksumField(null=True)

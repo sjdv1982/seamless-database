@@ -695,9 +695,7 @@ class DatabaseServer:
             try:
                 HashType.create(checksum=checksum, hash_type=value)
             except IntegrityError:
-                return _conflict_response(
-                    "HashType already exists with different value"
-                )
+                return _conflict_response("HashType already exists with different value")
 
         elif type_ == "semantic_to_syntactic":
             try:
@@ -708,9 +706,7 @@ class DatabaseServer:
             try:
                 celltype, subcelltype = request["celltype"], request["subcelltype"]
             except KeyError:
-                raise DatabaseError(
-                    "Malformed PUT semantic-to-syntactic request"
-                ) from None
+                raise DatabaseError("Malformed PUT semantic-to-syntactic request") from None
             for syntactic_checksum0 in value:
                 syntactic_checksum = parse_checksum(syntactic_checksum0, as_bytes=False)
                 with db_atomic():
@@ -741,13 +737,10 @@ class DatabaseServer:
                 raise DatabaseError("Malformed expression request")
             try:
                 # assert input_celltype in celltypes TODO? also for celltype
-                assert len(path) <= 100
                 assert len(input_celltype) <= 20
                 assert len(celltype) <= 20
             except AssertionError:
-                raise DatabaseError(
-                    "Malformed expression request (constraint violation)"
-                )
+                raise DatabaseError("Malformed expression request (constraint violation)")
             try:
                 Expression.create(
                     input_checksum=checksum,
@@ -757,9 +750,7 @@ class DatabaseServer:
                     result=value,
                 )
             except IntegrityError:
-                return _conflict_response(
-                    "Expression already exists with different result"
-                )
+                return _conflict_response("Expression already exists with different result")
 
         elif type_ == "metadata":
             try:
@@ -807,12 +798,8 @@ class DatabaseServer:
             try:
                 bucket_kind = request["bucket_kind"]
                 label = request["label"]
-                bucket_checksum = parse_checksum(
-                    request["bucket_checksum"], as_bytes=False
-                )
-                freshness_tokens = _normalize_freshness_tokens(
-                    request["freshness_tokens"]
-                )
+                bucket_checksum = parse_checksum(request["bucket_checksum"], as_bytes=False)
+                freshness_tokens = _normalize_freshness_tokens(request["freshness_tokens"])
                 captured_at = request["captured_at"]
                 _validate_bucket_probe_request(
                     bucket_kind,
