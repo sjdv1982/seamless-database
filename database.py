@@ -317,7 +317,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "2.2")
+    PROTOCOL = ("seamless", "database", "2.3")
 
     def __init__(
         self,

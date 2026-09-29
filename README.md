@@ -18,7 +18,7 @@ The database stores the following kinds of records:
 | **MetaData** | Stores a canonical execution record for each successful, non-probe transformation |
 | **IrreproducibleTransformation** | Records transformations whose results are not reproducible; metadata is preserved on migration |
 
-All data is persisted in a single SQLite file (typically `seamless.db`). The current protocol version is **2.2**.
+All data is persisted in a single SQLite file (typically `seamless.db`). The current protocol version is **2.3**.
 
 ## Expression cache schema
 
