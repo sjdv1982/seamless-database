@@ -494,3 +494,31 @@ def test_bucket_probe_roundtrip_and_overwrite(tmp_path):
         assert BucketProbe.select().count() == 1
     finally:
         _close_db()
+
+
+def test_transformation_identity_and_automatic_observations(tmp_path):
+    _init_db(tmp_path / "automatic.db")
+    server = DatabaseServer("127.0.0.1", 0)
+    def put(kind, **fields):
+        return asyncio.run(server._put(kind, TF_CHECKSUM, fields))
+    try:
+        assert put("transformation", value=RESULT_CHECKSUM) == "OK"
+        assert put("transformation", value=RESULT_CHECKSUM) == "OK"
+        assert RevTransformation.select().count() == 1
+        assert put("transformation", value=EXPR_OTHER_RESULT_CHECKSUM).status == 409
+        assert Transformation.get().result == RESULT_CHECKSUM
+        assert RevTransformation.get().result == RESULT_CHECKSUM
+        put("metadata", result=RESULT_CHECKSUM, value=_record())
+        metadata = MetaData.get().metadata
+        for _ in range(2):
+            assert put("irreproducible", result=EXPR_OTHER_RESULT_CHECKSUM, mode="automatic") == "OK"
+        assert IrreproducibleTransformation.select().count() == 1
+        assert IrreproducibleTransformation.get().metadata == ""
+        assert Transformation.get().result == RESULT_CHECKSUM
+        assert RevTransformation.get().result == RESULT_CHECKSUM
+        assert MetaData.get().metadata == metadata
+        assert put("irreproducible", result=RESULT_CHECKSUM, mode="automatic").status == 409
+        Transformation.delete().execute()
+        assert put("irreproducible", result=EXPR_OTHER_RESULT_CHECKSUM, mode="automatic").status == 404
+    finally:
+        _close_db()

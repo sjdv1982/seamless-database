@@ -724,8 +724,15 @@ class DatabaseServer:
                 raise DatabaseError(
                     "Malformed PUT transformation result request: value must be a checksum"
                 ) from None
-            Transformation.create(checksum=checksum, result=value)
-            RevTransformation.create(checksum=checksum, result=value)
+            with db_atomic():
+                row = _get_transformation_row(checksum)
+                if row is not None and row.result != value:
+                    return _conflict_response(
+                        "Transformation already exists with different result"
+                    )
+                if row is None:
+                    Transformation.create(checksum=checksum, result=value)
+                _ensure_rev_transformation_row(checksum, value)
 
         elif type_ == "expression":
             try:
@@ -835,8 +842,24 @@ class DatabaseServer:
                 result = parse_checksum(request["result"], as_bytes=False)
             except (KeyError, ValueError):
                 raise DatabaseError("Malformed 'irreproducible' request") from None
+            mode = request.get("mode", "manual")
+            if mode not in ("manual", "automatic"):
+                raise DatabaseError("Malformed irreproducible mode")
             with db_atomic():
                 tf_row = _get_transformation_row(checksum)
+                if mode == "automatic":
+                    if tf_row is None:
+                        return web.Response(status=404, text="Transformation not found")
+                    if parse_checksum(tf_row.result, as_bytes=False) == result:
+                        return _conflict_response("Reported result is the recorded result")
+                    if not IrreproducibleTransformation.select().where(
+                        IrreproducibleTransformation.checksum == checksum,
+                        IrreproducibleTransformation.result == result,
+                    ).exists():
+                        IrreproducibleTransformation.create(
+                            checksum=checksum, result=result, metadata=""
+                        )
+                    return "OK"
                 if tf_row is not None:
                     tf_result = parse_checksum(tf_row.result, as_bytes=False)
                     if tf_result != result:
