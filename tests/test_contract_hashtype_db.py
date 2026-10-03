@@ -68,7 +68,7 @@ MALFORMED_IN_RANGE = {
     ).word,
     "semantic-bit": HashType(Kind.RAW_TEXT, Length.SHORT, flags=Flag.SEMANTIC).word,
     "flags-on-untested": HashType(Kind.UNTESTED, Length.SHORT, flags=Flag.NUMERIC_SCALAR).word,
-    "unused-kind-12": 12,
+    "unused-kind-13": 13,
 }
 
 
