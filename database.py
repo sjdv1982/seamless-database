@@ -16,6 +16,8 @@ from database_models import (
     db_atomic,
     Transformation,
     RevTransformation,
+    CellJoin,
+    RevCellJoin,
     HashType,
     SyntacticToSemantic,
     Expression,
@@ -163,6 +165,17 @@ def _ensure_rev_transformation_row(checksum: str, result: str) -> None:
     RevTransformation.create(checksum=checksum, result=result)
 
 
+def _ensure_rev_celljoin_row(checksum: str, celltype: str, result: str) -> None:
+    query = RevCellJoin.select().where(
+        RevCellJoin.checksum == checksum,
+        RevCellJoin.celltype == celltype,
+        RevCellJoin.result == result,
+    )
+    if query.exists():
+        return
+    RevCellJoin.create(checksum=checksum, celltype=celltype, result=result)
+
+
 def _delete_rev_transformation_rows(checksum: str, result: str) -> None:
     (
         RevTransformation.delete()
@@ -289,9 +302,11 @@ types = (
     "metadata",
     "bucket_probe",
     "expression",
+    "celljoin",
     "irreproducible",
     "rev_expression",  # only GET
     "rev_transformations",  # only GET
+    "rev_celljoins",  # only GET
 )
 
 
@@ -317,7 +332,7 @@ def format_response(response, *, none_as_404=False):
 
 class DatabaseServer:
     future = None
-    PROTOCOL = ("seamless", "database", "2.3")
+    PROTOCOL = ("seamless", "database", "2.4")
 
     def __init__(
         self,
@@ -645,6 +660,20 @@ class DatabaseServer:
                 return None
             return parse_checksum(result[0].result)
 
+        elif type_ == "celljoin":
+            try:
+                celltype = request["celltype"]
+            except (KeyError, TypeError):
+                raise DatabaseError("Malformed celljoin request") from None
+            if celltype not in ("mixed", "plain", "deepcell", "deepfolder"):
+                raise DatabaseError("Malformed celljoin request")
+            row = CellJoin.get_or_none(
+                (CellJoin.checksum == checksum) & (CellJoin.celltype == celltype)
+            )
+            if row is None:
+                return None
+            return parse_checksum(row.result)
+
         elif type_ == "rev_expression":
             expressions = (
                 Expression.select()
@@ -679,6 +708,19 @@ class DatabaseServer:
                 return None
             result = [transformation.checksum for transformation in transformations]
             return result
+
+        elif type_ == "rev_celljoins":
+            rows = (
+                RevCellJoin.select()
+                .where(RevCellJoin.result == checksum)
+                .execute()
+            )
+            if not rows:
+                return None
+            return [
+                {"checksum": row.checksum, "celltype": row.celltype}
+                for row in rows
+            ]
 
         else:
             raise DatabaseError("Unknown request type")
@@ -733,6 +775,31 @@ class DatabaseServer:
                 if row is None:
                     Transformation.create(checksum=checksum, result=value)
                 _ensure_rev_transformation_row(checksum, value)
+
+        elif type_ == "celljoin":
+            try:
+                value = parse_checksum(request["value"], as_bytes=False)
+                celltype = request["celltype"]
+            except (KeyError, TypeError, ValueError):
+                raise DatabaseError(
+                    "Malformed PUT celljoin result request"
+                ) from None
+            if celltype not in ("mixed", "plain", "deepcell", "deepfolder"):
+                raise DatabaseError("Malformed PUT celljoin result request")
+            with db_atomic():
+                row = CellJoin.get_or_none(
+                    (CellJoin.checksum == checksum)
+                    & (CellJoin.celltype == celltype)
+                )
+                if row is not None and row.result != value:
+                    return _conflict_response(
+                        "CellJoin already exists with different result"
+                    )
+                if row is None:
+                    CellJoin.create(
+                        checksum=checksum, celltype=celltype, result=value
+                    )
+                _ensure_rev_celljoin_row(checksum, celltype, value)
 
         elif type_ == "expression":
             try:
