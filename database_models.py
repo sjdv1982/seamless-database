@@ -58,6 +58,35 @@ class RevTransformation(BaseModel):
     checksum = ChecksumField(unique=False)
 
 
+class CellJoin(BaseModel):
+    checksum = ChecksumField()
+    celltype = CharField(max_length=20)
+    result = ChecksumField(index=True, unique=False)
+
+    class Meta:
+        database = _db
+        legacy_table_names = False
+        primary_key = CompositeKey("checksum", "celltype")
+
+    @classmethod
+    def create(cls, **kwargs):
+        try:
+            return super().create(**kwargs)
+        except IntegrityError:
+            instance = cls.get(
+                checksum=kwargs["checksum"], celltype=kwargs["celltype"]
+            )
+            if instance.result != kwargs["result"]:
+                raise
+            return instance
+
+
+class RevCellJoin(BaseModel):
+    result = ChecksumField(index=True, unique=False)
+    checksum = ChecksumField(unique=False)
+    celltype = CharField(max_length=20)
+
+
 class HashType(BaseModel):
     checksum = ChecksumField(primary_key=True)
     hash_type = IntegerField()
@@ -186,6 +215,8 @@ class IrreproducibleTransformation(BaseModel):
 _model_classes = [
     Transformation,
     RevTransformation,
+    CellJoin,
+    RevCellJoin,
     HashType,
     SyntacticToSemantic,
     Expression,
@@ -197,9 +228,11 @@ _primary = {}
 for model_class in _model_classes:
     if (
         model_class is Expression
+        or model_class is CellJoin
         or model_class is HashType
         or model_class is SyntacticToSemantic
         or model_class is RevTransformation
+        or model_class is RevCellJoin
         or model_class is MetaData
         or model_class is BucketProbe
     ):
